@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UPSTREAM_VERSION="18.20.0"
+PACKAGE_REVISION="${PACKAGE_REVISION:-1}"
+
+default_suite() {
+  local suite
+
+  if [ -r /etc/os-release ]; then
+    suite="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"' | head -n 1)"
+  fi
+
+  printf '%s' "${suite:-sid}"
+}
+
+SUITE="${SUITE:-$(default_suite)}"
+ARCH="${ARCH:-$(dpkg --print-architecture)}"
+BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build}"
+DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
+
+die() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+case "$SUITE" in
+  bookworm | trixie | sid | noble) ;;
+  *) die "unsupported suite: $SUITE" ;;
+esac
+
+case "$ARCH" in
+  arm64)
+    TARGET="aarch64-unknown-linux-musl"
+    SHA256="bef1eb7243ef1210c1f9d8df95cd4be37325ae97b92a281189daa6deff604b6a"
+    ;;
+  amd64)
+    TARGET="x86_64-unknown-linux-musl"
+    SHA256="b6b4d01be0519701798ced6916e7095ac39a0dc8bf9a5fecc5c4aae62fa6b7ce"
+    ;;
+  *) die "unsupported architecture: $ARCH" ;;
+esac
+
+[[ "$PACKAGE_REVISION" =~ ^[0-9]+$ ]] || die "package revision must be numeric: $PACKAGE_REVISION"
+
+VERSION="$UPSTREAM_VERSION-$PACKAGE_REVISION~$SUITE"
+WORK_DIR="$BUILD_DIR/atuin-$VERSION-$ARCH"
+SRC_DIR="$WORK_DIR/atuin-$TARGET"
+PKG_DIR="$WORK_DIR/pkg"
+DEB_PATH="$DIST_DIR/atuin_${VERSION}_${ARCH}.deb"
+
+rm -rf -- "$WORK_DIR"
+mkdir -p "$WORK_DIR" "$PKG_DIR" "$DIST_DIR"
+curl --fail --location --silent --show-error \
+  "https://github.com/atuinsh/atuin/releases/download/v$UPSTREAM_VERSION/atuin-$TARGET.tar.gz" \
+  --output "$WORK_DIR/upstream.tar.gz"
+printf '%s  %s\n' "$SHA256" "$WORK_DIR/upstream.tar.gz" | sha256sum --check
+# Verify the pinned archive before extracting or packaging its contents.
+tar -xzf "$WORK_DIR/upstream.tar.gz" -C "$WORK_DIR"
+
+install -D -m 0755 "$SRC_DIR/atuin" "$PKG_DIR/usr/bin/atuin"
+install -D -m 0644 "$SRC_DIR/README.md" "$PKG_DIR/usr/share/doc/atuin/README.md"
+install -D -m 0644 "$SRC_DIR/CHANGELOG.md" "$PKG_DIR/usr/share/doc/atuin/changelog"
+install -D -m 0644 "$ROOT_DIR/packaging/copyright" "$PKG_DIR/usr/share/doc/atuin/copyright"
+install -D -m 0644 "$ROOT_DIR/packaging/control.in" "$PKG_DIR/DEBIAN/control"
+
+cat > "$PKG_DIR/usr/share/doc/atuin/changelog.Debian" <<CHANGELOG
+atuin ($VERSION) $SUITE; urgency=medium
+
+  * Package the unchanged official v$UPSTREAM_VERSION musl release binary.
+
+ -- Brian Cosgrove <cosgroveb@users.noreply.github.com>  $(date -R)
+CHANGELOG
+
+sed -i -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$ARCH/g" "$PKG_DIR/DEBIAN/control"
+gzip -9n "$PKG_DIR/usr/share/doc/atuin/README.md" \
+  "$PKG_DIR/usr/share/doc/atuin/changelog" \
+  "$PKG_DIR/usr/share/doc/atuin/changelog.Debian"
+find "$PKG_DIR" -type d -exec chmod 0755 {} +
+find "$PKG_DIR" -type f -exec chmod 0644 {} +
+chmod 0755 "$PKG_DIR/usr/bin/atuin"
+(
+  cd "$PKG_DIR"
+  find usr -type f -exec md5sum {} \; | sort -k 2 > DEBIAN/md5sums
+)
+chmod 0644 "$PKG_DIR/DEBIAN/md5sums"
+dpkg-deb --build --root-owner-group -Zxz "$PKG_DIR" "$DEB_PATH"
+printf '%s\n' "$DEB_PATH"

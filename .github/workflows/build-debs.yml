@@ -1,0 +1,42 @@
+name: Build Debian packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.suite }} ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [bookworm, trixie, sid, noble]
+        arch: [arm64, amd64]
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl dpkg-dev git gzip
+
+      - name: Check out packaging repository
+        uses: actions/checkout@v4
+
+      - name: Build package
+        env:
+          SUITE: ${{ matrix.suite }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/build-package
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atuin-${{ matrix.suite }}-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error

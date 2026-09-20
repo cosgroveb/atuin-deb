@@ -1,0 +1,14 @@
+Package: atuin
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Brian Cosgrove <cosgroveb@users.noreply.github.com>
+Depends: ca-certificates
+Homepage: https://atuin.sh
+Description: shell history search and synchronization
+ Atuin stores shell history in a database and provides interactive search
+ and optional encrypted synchronization.
+ .
+ This private package contains the unchanged official musl release binary,
+ including upstream AI support.
